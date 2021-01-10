@@ -63,22 +63,6 @@ public class Heartrate extends Plugin implements ImageAnalysis.Analyzer {
         sendCallSuccessToIonic(call);
     }
 
-    public void getCameraFeed() {
-        Executor executor = ContextCompat.getMainExecutor(getContext());
-
-        cameraProviderFuture = ProcessCameraProvider.getInstance(getContext());
-
-        cameraProviderFuture.addListener(() -> {
-            try {
-                cameraProvider = cameraProviderFuture.get();
-                bindPreview(cameraProvider);
-            } catch (InterruptedException | ExecutionException e) {
-                // No errors need to be handled for this Future.
-                // This should never be reached.
-            }
-        }, executor);
-    }
-
     void bindPreview(@NonNull ProcessCameraProvider cameraProvider) {
 
         Executor executor = ContextCompat.getMainExecutor(getContext());
@@ -99,10 +83,38 @@ public class Heartrate extends Plugin implements ImageAnalysis.Analyzer {
 
         setInterval(() -> {
             sendFeedToIonic(latestLumiPoint);
-        }, 200);
+        }, 100);
     }
 
-    @RequiresApi(api = Build.VERSION_CODES.N)
+    public void getCameraFeed() {
+        Executor executor = ContextCompat.getMainExecutor(getContext());
+
+        cameraProviderFuture = ProcessCameraProvider.getInstance(getContext());
+
+        cameraProviderFuture.addListener(() -> {
+            try {
+                cameraProvider = cameraProviderFuture.get();
+                bindPreview(cameraProvider);
+            } catch (InterruptedException | ExecutionException e) {
+                // No errors need to be handled for this Future.
+                // This should never be reached.
+            }
+        }, executor);
+    }
+
+    private void sendFeedToIonic(JSObject data) {
+        JSObject ret = new JSObject();
+        ret.put("data", data);
+
+        bridge.triggerWindowJSEvent("feed", data.toString());
+    }
+
+    private void sendCallSuccessToIonic(PluginCall call) {
+        JSObject ret = new JSObject();
+        ret.put("callStatus", "success");
+        call.success(ret);
+    }
+
     @Override
     public void analyze(ImageProxy image) {
         ByteBuffer buffer = image.getPlanes()[0].getBuffer();
@@ -118,7 +130,8 @@ public class Heartrate extends Plugin implements ImageAnalysis.Analyzer {
         if (!pixels.isEmpty()) for (Integer mark : pixels) sum += mark;
 
         double luminosity = sum.doubleValue() / pixels.size();
-        LocalTime time = LocalTime.now();
+        Long tsLong = System.currentTimeMillis();
+        String time = tsLong.toString();
 
         JSObject dataPoint = new JSObject();
         dataPoint.put("time", time);
@@ -129,19 +142,6 @@ public class Heartrate extends Plugin implements ImageAnalysis.Analyzer {
         image.close();
 
         if (analysisTimeout) cameraProvider.unbindAll();
-    }
-
-    private void sendFeedToIonic(JSObject data) {
-        JSObject ret = new JSObject();
-        ret.put("data", data);
-
-        bridge.triggerWindowJSEvent("feed", data.toString());
-    }
-
-    private void sendCallSuccessToIonic(PluginCall call) {
-        JSObject ret = new JSObject();
-        ret.put("callStatus", "success");
-        call.success(ret);
     }
 
     @Override
