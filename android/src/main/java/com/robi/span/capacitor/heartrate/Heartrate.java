@@ -2,12 +2,10 @@ package com.robi.span.capacitor.heartrate;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
-import android.os.Build;
 import android.util.Log;
 import android.util.Size;
 
 import androidx.annotation.NonNull;
-import androidx.annotation.RequiresApi;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageProxy;
@@ -23,12 +21,9 @@ import com.getcapacitor.PluginMethod;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.nio.ByteBuffer;
-import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
-
-import static com.robi.span.capacitor.heartrate.Util.setInterval;
 
 @NativePlugin(requestCodes = {Heartrate.REQUEST_CAMERA}, permissions = {Manifest.permission.CAMERA})
 public class Heartrate extends Plugin implements ImageAnalysis.Analyzer {
@@ -36,12 +31,10 @@ public class Heartrate extends Plugin implements ImageAnalysis.Analyzer {
     protected static final int REQUEST_CAMERA = 12345; // Unique request code
 
     private ListenableFuture<ProcessCameraProvider> cameraProviderFuture;
-
     ProcessCameraProvider cameraProvider;
 
     private JSObject latestLumiPoint = new JSObject();
-
-    public Boolean analysisTimeout = false;
+    public Boolean analysisInProgress = false;
 
     @PluginMethod
     public void getLuminosityFeed(PluginCall call) {
@@ -59,8 +52,24 @@ public class Heartrate extends Plugin implements ImageAnalysis.Analyzer {
 
     @PluginMethod
     public void stopAnalysis(PluginCall call) {
-        analysisTimeout = true;
+        analysisInProgress = false;
         sendCallSuccessToIonic(call);
+    }
+
+    public void getCameraFeed() {
+        Executor executor = ContextCompat.getMainExecutor(getContext());
+
+        cameraProviderFuture = ProcessCameraProvider.getInstance(getContext());
+
+        cameraProviderFuture.addListener(() -> {
+            try {
+                cameraProvider = cameraProviderFuture.get();
+                bindPreview(cameraProvider);
+            } catch (InterruptedException | ExecutionException e) {
+                // No errors need to be handled for this Future.
+                // This should never be reached.
+            }
+        }, executor);
     }
 
     void bindPreview(@NonNull ProcessCameraProvider cameraProvider) {
@@ -81,32 +90,14 @@ public class Heartrate extends Plugin implements ImageAnalysis.Analyzer {
         cameraProvider.unbindAll();
         cameraProvider.bindToLifecycle((LifecycleOwner) getContext(), cameraSelector, imageAnalysis);
 
-        setInterval(() -> {
-            sendFeedToIonic(latestLumiPoint);
-        }, 100);
+        analysisInProgress = true;
     }
 
-    public void getCameraFeed() {
-        Executor executor = ContextCompat.getMainExecutor(getContext());
-
-        cameraProviderFuture = ProcessCameraProvider.getInstance(getContext());
-
-        cameraProviderFuture.addListener(() -> {
-            try {
-                cameraProvider = cameraProviderFuture.get();
-                bindPreview(cameraProvider);
-            } catch (InterruptedException | ExecutionException e) {
-                // No errors need to be handled for this Future.
-                // This should never be reached.
-            }
-        }, executor);
-    }
-
-    private void sendFeedToIonic(JSObject data) {
+    private void sendFeedToIonic() {
         JSObject ret = new JSObject();
-        ret.put("data", data);
+        ret.put("data", latestLumiPoint);
 
-        bridge.triggerWindowJSEvent("feed", data.toString());
+        bridge.triggerWindowJSEvent("feed", ret.toString());
     }
 
     private void sendCallSuccessToIonic(PluginCall call) {
@@ -115,10 +106,17 @@ public class Heartrate extends Plugin implements ImageAnalysis.Analyzer {
         call.success(ret);
     }
 
+    public static byte[] toByteArray(ByteBuffer $this$toByteArray) {
+        $this$toByteArray.rewind();
+        byte[] data = new byte[$this$toByteArray.remaining()];
+        $this$toByteArray.get(data);
+        return data;
+    }
+
     @Override
     public void analyze(ImageProxy image) {
         ByteBuffer buffer = image.getPlanes()[0].getBuffer();
-        byte[] data = Util.toByteArray(buffer);
+        byte[] data = toByteArray(buffer);
 
         ArrayList<Integer> pixels = new ArrayList<Integer>();
         for (int i = 0; i < data.length; i++) {
@@ -138,10 +136,11 @@ public class Heartrate extends Plugin implements ImageAnalysis.Analyzer {
         dataPoint.put("dataPoint", luminosity);
 
         latestLumiPoint = dataPoint;
-
+        sendFeedToIonic();
         image.close();
 
-        if (analysisTimeout) cameraProvider.unbindAll();
+        if (!analysisInProgress)
+            cameraProvider.unbindAll();
     }
 
     @Override
